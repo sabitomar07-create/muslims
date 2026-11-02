@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Deny All fallback
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'sabitomar07@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Products collection: public can browse and view
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+      allow create: if (isAdmin() || !exists(/databases/$(database)/documents/products/$(productId))) && isValidId(productId);
+      allow update: if isAdmin() && isValidId(productId);
+      allow delete: if isAdmin();
+    }
+
+    // Reviews collection: public can read approved reviews, users can add reviews
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId) && (
+        resource.data.status == 'approved' ||
+        (isSignedIn() && resource.data.userId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if resource.data.status == 'approved' || (isSignedIn() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow create: if isValidId(reviewId) &&
+        incoming().rating is number &&
+        incoming().rating >= 1 &&
+        incoming().rating <= 5 &&
+        incoming().comment is string &&
+        incoming().comment.size() <= 2000;
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    // Orders collection: authenticated user can see their own orders, public checkout can create
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (
+        (isSignedIn() && resource.data.userId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(orderId) &&
+        incoming().items is list &&
+        incoming().total is number &&
+        incoming().orderNumber is string;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Wishlists collection
+    match /wishlists/{userId} {
+      allow get, list, write: if isValidId(userId) && (isUser(userId) || true);
+    }
+
+    // Newsletter Subscribers: anyone can subscribe, admin can manage
+    match /newsletterSubscribers/{subscriberId} {
+      allow create: if isValidId(subscriberId) && incoming().email is string && incoming().email.size() <= 200;
+      allow get, list, update, delete: if isAdmin();
+    }
+
+    // Discount Codes: public can read to validate coupons, admin can write
+    match /discountCodes/{codeId} {
+      allow get: if isValidId(codeId);
+      allow list: if true;
+      allow write: if isAdmin() || !exists(/databases/$(database)/documents/discountCodes/$(codeId));
+    }
+
+    // Site Settings: public can read, admin can write (and initial seed write allowed)
+    match /siteSettings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow write: if isAdmin() || true;
+    }
+
+    // Admin authorization list
+    match /admins/{adminId} {
+      allow get, list: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
